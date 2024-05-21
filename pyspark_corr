@@ -1,0 +1,49 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, udf, row_number, lit
+from pyspark.sql.types import DoubleType
+from pyspark.sql import Window
+import math
+
+# Initialize Spark session
+spark = SparkSession.builder.appName("FindSimilarClients").getOrCreate()
+
+# Load data
+data = spark.read.csv('your_dataset.csv', header=True, inferSchema=True)
+
+# Select columns B to F
+features = data.select('A', 'B', 'C', 'D', 'E', 'F')
+
+# Define a UDF to compute Euclidean distance
+def euclidean_distance(row1, row2):
+    dist = 0
+    for i in range(len(row1)):
+        dist += (row1[i] - row2[i]) ** 2
+    return math.sqrt(dist)
+
+euclidean_distance_udf = udf(euclidean_distance, DoubleType())
+
+# Choose a client ID to find similar clients
+client_id = 'some_client_id'
+
+# Get the reference client row
+reference_client = features.filter(col('A') == client_id).collect()[0]
+
+# Filter clients with the same B value
+filtered_data = features.filter(col('B') == reference_client['B'])
+
+# Compute similarity for each client
+def compute_similarity(df, ref_row):
+    ref_values = (ref_row['C'], ref_row['D'], ref_row['E'], ref_row['F'])
+    return df.withColumn('distance', euclidean_distance_udf(lit(ref_values), col('C', 'D', 'E', 'F')))
+
+similar_clients = compute_similarity(filtered_data, reference_client)
+
+# Rank clients based on the distance
+window = Window.orderBy('distance')
+ranked_clients = similar_clients.withColumn('rank', row_number().over(window))
+
+# Show the ranked clients
+ranked_clients.select('A', 'distance', 'rank').show()
+
+# Stop the Spark session
+spark.stop()
